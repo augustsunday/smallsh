@@ -7,6 +7,7 @@
 #include <stdlib.h>
 #include <stdio.h>
 #include <string.h>
+#include <stddef.h>
 
 /* print statement for debug use */
 #ifdef DEBUG
@@ -16,6 +17,39 @@
 #endif
 
 const int WORD_LIMIT = 512;
+
+char *str_gsub(char *restrict *restrict haystack, char const *restrict needle, char const *restrict sub)
+{
+  char *str = *haystack;
+  size_t haystack_len = strlen(str);
+  size_t const needle_len = strlen(needle),
+         sub_len = strlen(sub);
+
+  ptrdiff_t off = str - *haystack;
+  for (; (str = strstr(str, needle));) {
+      if (sub_len > needle_len) {
+        str = realloc(*haystack, sizeof **haystack * (haystack_len + sub_len - needle_len + 1));
+        if (!str) goto exit; 
+        *haystack = str;
+        str = off + *haystack;
+      }
+      memmove(str + sub_len, str + needle_len, haystack_len + 1 - off - needle_len);
+      memcpy(str, sub, sub_len);
+      haystack_len = haystack_len + sub_len - needle_len;
+      str += sub_len;
+      }
+  str = *haystack;
+  if (sub_len < needle_len) {
+    str = realloc(*haystack, sizeof **haystack * (haystack_len + 1));
+  }
+  if (!str) goto exit;
+
+  *haystack = str;
+
+exit:;
+  return str;
+ }
+ 
 
 int split_input(char **words, char *line_ptr) {
     char* restrict word;
@@ -66,10 +100,10 @@ int main(void) {
     /* Prompt */
     prompt = getenv("PS1");
     dprintf("PS1 Prompt: %s\n",prompt);
-    if (prompt == 0) {
-      perror("Error: prompt");
+    if (prompt == NULL || *prompt == '\0') {
+      prompt = "$\0";
     }
-    fprintf(stderr, "%s", prompt);
+    fprintf(stderr,"%s", prompt);
 
     /* Read a line of input */
     read = getline(&line_ptr, &line_len, stdin);
@@ -79,8 +113,9 @@ int main(void) {
       exit(EXIT_FAILURE);     
     } else if (read == 0) {
       continue;
-    }
+    } else {
     dprintf("Line input: %s\n", line_ptr);
+    };
 
     /* Split input */
     words_read = split_input(words, line_ptr);
@@ -96,6 +131,7 @@ int main(void) {
     /* Parse */
 
     /* Execute */
+    if (words[0] == NULL) continue;
     execute(words);
 
 
@@ -107,8 +143,6 @@ int main(void) {
   }
 
   /* Cleanup */
-cleanup:;
-        return(EXIT_FAILURE);
 
 return 0;
 }
