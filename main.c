@@ -11,6 +11,7 @@
 #include <sys/wait.h>
 #include <unistd.h>
 #include <stdbool.h>
+#include <errno.h>
 
 /* print statement for debug use */
 #ifdef DEBUG
@@ -126,15 +127,57 @@ free(home_dir);
 
 return 0;
 }
+
+int cd(char **args, struct shell_env *environment) {
+  int ret = 0;
+  dprintf("cd built-in\n");
+  dprintf("args[1]: %s\n",args[1]);
+  dprintf("args[2]: %s\n",args[2]);
+  if (args[1] != NULL && args[2] != NULL) {
+    perror("too many arguments");
+    return 1;
+  }
+
+  else if (args[1] == NULL) {
+    dprintf("No argument provided. cd to HOME\n");
+    ret = chdir(getenv("HOME"));
+    if (ret == 0) return 0;
+
+    perror("Unable to cd to HOME");
+    return(errno);
+  }
+  else {
+    dprintf("Attempting to change to dir %s",args[1]);
+    ret = chdir(args[1]);
+    if (ret == 0) return 0;
+
+    perror("Unable to cd to directory provided");
+    return(errno);
+  }
+  return(errno);
+}
+
     
 
-int execute(char **args) {
+int execute(char **args, struct shell_env *environment) {
   int childStatus;
 
   /* initial check for valid command word*/
   if (*args == NULL) {
     dprintf("No command word detected. Return to prompt.\n");
     return 0;
+  }
+
+  /* built-ins */
+  
+  /* exit */
+
+  /* cd */
+
+  if (strcmp(*args, "cd") == 0) {
+    dprintf("cd built-in\n");
+    int success = cd(args, environment);
+    return success;
   }
 
   /*fork and execute*/ 
@@ -165,6 +208,19 @@ int execute(char **args) {
 	} 
 }
 
+int parse(char** args) {
+  int i = 0;
+  while(i < WORD_LIMIT && args[i] != NULL && (strcmp(args[i], "#") != 0)) {
+    i++;
+  }
+  if (args[i] != NULL && (strcmp(args[i], "#") == 0)) {
+    free(args[i]);
+    args[i] = NULL;
+  }
+  return 0;
+}
+
+
 int main(void) {
   char* line_ptr = NULL;
   size_t line_len = 0;
@@ -176,7 +232,7 @@ int main(void) {
   words = malloc(sizeof *words * WORD_LIMIT); 
 
   struct shell_env environment = {
-  .self_pid = NULL,
+  .self_pid = "",
   .last_bg = "0",
   .last_fg = ""
   };
@@ -231,10 +287,12 @@ int main(void) {
     expand(words, &environment);
 
     /* Parse */
+    parse(words);
+
 
     /* Execute */
     if (words[0] == NULL) continue;
-    execute(words);
+    execute(words, &environment);
    
     
 
