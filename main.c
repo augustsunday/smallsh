@@ -4,14 +4,24 @@
 #define _GNU_SOURCE
 #define  _POSIX_C_SOURCE 200809L
 
+
+#include <fcntl.h>
 #include <stdlib.h>
 #include <stdio.h>
 #include <string.h>
 #include <stddef.h>
+#include <sys/stat.h>
+#include <sys/types.h>
 #include <sys/wait.h>
 #include <unistd.h>
 #include <stdbool.h>
 #include <errno.h>
+
+/* Maximum # of arguments allowed in a line */
+#define WORD_LIMIT 512
+
+/* Maximum number of bg processes allowed */
+#define PROCESS_LIMIT 512
 
 /* print statement for debug use */
 #ifdef DEBUG
@@ -20,13 +30,16 @@
 #define dprintf(...) ((void)0)
 #endif
 
-const int WORD_LIMIT = 512;
 
 struct shell_env {
   char *self_pid;
   char *last_fg;
   char *last_bg;
   char *home_dir;
+  char *infile_path;
+  char *outfile_path;
+  pid_t **fg_process_list;
+  bool run_in_background;
 };
 
 
@@ -105,7 +118,6 @@ int expand(char **args, struct shell_env *environment) {
 
 
   for (int i=0; args[i] != NULL && i < WORD_LIMIT; i++) {
-    dprintf("Expanding %s", args[i]);
 
     /* Expand ~/ if it occurs at start of word */
     if (strncmp(args[i], "~/", 2) == 0) {
@@ -192,31 +204,93 @@ int execute(char **args, struct shell_env *environment) {
 	case 0:
     /* Child process */
     dprintf("Executing child process with command word %s",args[0]);
+
+    /* TODO Reset all signals to dispositions when smallsh was invoked */
+
+    /* Redirect input and output, if requested */
+    if (environment->outfile_path != NULL) {
+      if(fclose(stdout) != 0) {
+        perror("Unable to close stdout for redirection\n");
+        exit(errno);
+      };
+      if (open(environment->outfile_path, O_WRONLY | O_CREAT | O_TRUNC, 0777) == -1) {
+        perror("Unable to open file for output redirection\n");
+        exit(errno);
+      }
+    }
+
+    if (environment->infile_path != NULL) {
+      if(fclose(stdin) != 0) {
+        perror("Unable to close stdin for redirection\n");
+        exit(errno);
+      };
+      if (open(environment->infile_path,O_RDONLY) == -1) {
+        perror("Unable to open file for input redirection\n");
+        exit(errno);
+      }
+
+    }
+
     execvp(*args, args);
 		// exec only returns if there is an error
 		perror("execute");
 		return(2);
 		break;
+
 	default:
 		// In the parent process
 		// Wait for child's termination
-    dprintf("In parent process");
+    dprintf("In parent process\n");
     spawnPid = waitpid(spawnPid, &childStatus, 0);
-    dprintf("Child process completed");
+    dprintf("Child process completed\n");
     return(0);
 		break;
 	} 
 }
 
-int parse(char** args) {
+int parse(char** args, struct shell_env *environment) {
+
   int i = 0;
+
+  /* Look for comment mark from left to right */
   while(i < WORD_LIMIT && args[i] != NULL && (strcmp(args[i], "#") != 0)) {
     i++;
   }
   if (args[i] != NULL && (strcmp(args[i], "#") == 0)) {
-    free(args[i]);
     args[i] = NULL;
   }
+
+  /* Look for bg token '&' */
+  i -= 1;
+
+  if ((i >= 0) && (args[i] != NULL) && (strcmp(args[i], "&") == 0)) {
+    dprintf("Background token detected\n");
+    environment->run_in_background = true;
+    args[i] = NULL;
+    i -= 1;
+  }
+
+  /* Check for input and output redirects */
+  for (int x = 0; x < 2; x++) {
+    if (i >= 1) {
+      if ((strcmp(args[i - 1], ">") == 0) && (environment->outfile_path == NULL)) {
+        environment->outfile_path = args[i];
+        dprintf("Redirect output path: %s\n", environment->outfile_path);
+        args[i-1] = NULL;
+        i -= 2;
+      }
+      else if ((strcmp(args[i - 1], "<") == 0) && (environment->infile_path == NULL)) {
+        environment->infile_path = args[i];
+        dprintf("Redirect input path: %s\n", environment->infile_path);
+        args[i-1] = NULL;
+        i -= 2;
+      }
+    }
+  }
+
+
+
+
   return 0;
 }
 
@@ -234,8 +308,11 @@ int main(void) {
   struct shell_env environment = {
   .self_pid = "",
   .last_bg = "0",
-  .last_fg = ""
+  .last_fg = "",
+  .fg_process_list = NULL,
+  .run_in_background = false
   };
+  environment.fg_process_list = malloc((PROCESS_LIMIT + 1) * sizeof(pid_t));
 
   /* Get PID of smallsh for later expansion */
   int smallsh_pid = 0;
@@ -248,7 +325,9 @@ int main(void) {
   dprintf("SmallshPID = %s\n",environment.self_pid);
 
 
+
   for (;;) {
+
     /* TODO: Realloc everything */
 
     /* Input */
@@ -287,7 +366,7 @@ int main(void) {
     expand(words, &environment);
 
     /* Parse */
-    parse(words);
+    parse(words, &environment);
 
 
     /* Execute */
@@ -302,13 +381,13 @@ int main(void) {
 cleanup:;
     for (int i=0; i < WORD_LIMIT; i++) {
       if (words[i] != NULL) {
-        free(words[i]);
         words[i] = NULL;
       }
 
     }
-
-
+    environment.run_in_background = false;
+    environment.outfile_path = NULL;
+    environment.infile_path = NULL;
   }
 
 
