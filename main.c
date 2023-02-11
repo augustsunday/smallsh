@@ -38,7 +38,7 @@ struct shell_env {
   char *home_dir;
   char *infile_path;
   char *outfile_path;
-  pid_t **fg_process_list;
+  pid_t bg_process_list[PROCESS_LIMIT];
   bool run_in_background;
 };
 
@@ -140,6 +140,7 @@ free(home_dir);
 return 0;
 }
 
+
 int cd(char **args, struct shell_env *environment) {
   int ret = 0;
   dprintf("cd built-in\n");
@@ -183,6 +184,7 @@ int execute(char **args, struct shell_env *environment) {
   /* built-ins */
   
   /* exit */
+  
 
   /* cd */
 
@@ -239,12 +241,29 @@ int execute(char **args, struct shell_env *environment) {
 
 	default:
 		// In the parent process
-		// Wait for child's termination
+    // fg or bg process?
+
     dprintf("In parent process\n");
-    spawnPid = waitpid(spawnPid, &childStatus, 0);
-    dprintf("Child process completed\n");
-    return(0);
-		break;
+    
+    /* Foreground process */
+    if (!environment->run_in_background) {
+      spawnPid = waitpid(spawnPid, &childStatus, 0);
+      dprintf("Child process completed\n");
+      return(0);
+    }
+
+    /* bg process */
+    int i = 0;
+    for (; i < PROCESS_LIMIT && environment->bg_process_list[i] != 0; i++){};
+    if (i == PROCESS_LIMIT) {
+      perror("Exceeded maximum number of background processes");
+      return(2);
+    } else {
+      /* BG process list has a slot available. Register PID and exit without waiting */
+      environment->bg_process_list[i] = spawnPid;
+      return(0);
+    }
+    break;
 	} 
 }
 
@@ -257,6 +276,7 @@ int parse(char** args, struct shell_env *environment) {
     i++;
   }
   if (args[i] != NULL && (strcmp(args[i], "#") == 0)) {
+    free(args[i]);
     args[i] = NULL;
   }
 
@@ -266,6 +286,7 @@ int parse(char** args, struct shell_env *environment) {
   if ((i >= 0) && (args[i] != NULL) && (strcmp(args[i], "&") == 0)) {
     dprintf("Background token detected\n");
     environment->run_in_background = true;
+    free(args[i]);
     args[i] = NULL;
     i -= 1;
   }
@@ -276,12 +297,14 @@ int parse(char** args, struct shell_env *environment) {
       if ((strcmp(args[i - 1], ">") == 0) && (environment->outfile_path == NULL)) {
         environment->outfile_path = args[i];
         dprintf("Redirect output path: %s\n", environment->outfile_path);
+        free(args[i-1]);
         args[i-1] = NULL;
         i -= 2;
       }
       else if ((strcmp(args[i - 1], "<") == 0) && (environment->infile_path == NULL)) {
         environment->infile_path = args[i];
         dprintf("Redirect input path: %s\n", environment->infile_path);
+        free(args[i-1]);
         args[i-1] = NULL;
         i -= 2;
       }
@@ -309,10 +332,9 @@ int main(void) {
   .self_pid = "",
   .last_bg = "0",
   .last_fg = "",
-  .fg_process_list = NULL,
+  .bg_process_list= {},
   .run_in_background = false
   };
-  environment.fg_process_list = malloc((PROCESS_LIMIT + 1) * sizeof(pid_t));
 
   /* Get PID of smallsh for later expansion */
   int smallsh_pid = 0;
@@ -380,7 +402,8 @@ int main(void) {
     /* Cleanup */
 cleanup:;
     for (int i=0; i < WORD_LIMIT; i++) {
-      if (words[i] != NULL) {
+      if (words[i] != NULL && *words[i] != 0) {
+        free(words[i]);
         words[i] = NULL;
       }
 
