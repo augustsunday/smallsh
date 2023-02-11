@@ -6,6 +6,7 @@
 
 
 #include <fcntl.h>
+#include <signal.h>
 #include <stdlib.h>
 #include <stdio.h>
 #include <string.h>
@@ -40,6 +41,7 @@ struct shell_env {
   char *outfile_path;
   pid_t bg_process_list[PROCESS_LIMIT];
   bool run_in_background;
+  sigset_t sh_signals;
 };
 
 char *pid_to_str(pid_t process_id) {
@@ -192,21 +194,44 @@ int cd(char **args, struct shell_env *environment) {
   return(errno);
 }
 
+int exit_sh(char **args, struct shell_env *environment) {
+  /* set exit status*/
+  int exit_status = environment->last_fg_exit_status;
+  dprintf("built-in exit function 'exit_sh'\n");
+  dprintf("args[1]: %s\n",args[1]);
+  dprintf("args[2]: %s\n",args[2]);
+
+  if (args[1] != NULL && args[2] != NULL) {
+    perror("too many arguments");
+    return 1;
+  }
+  if (args[1]) exit_status = atoi(args[1]);
+
+  /* SIGINT all smallsh processes */
+  kill(0, SIGINT); 
+
+  fprintf(stderr, "\nexit\n");
+  exit(exit_status);
+}
     
 
 int execute(char **args, struct shell_env *environment) {
   int childStatus;
 
-  /* initial check for valid command word*/
+  /* initial check for existence of valid command word*/
   if (*args == NULL) {
     dprintf("No command word detected. Return to prompt.\n");
     return 0;
   }
 
-  /* built-ins */
+  /* Route requests for built-ins to custom functions */
   
   /* exit */
-  
+  if (strcmp(*args, "exit") == 0) {
+    dprintf("exit built-in\n");
+    int success = exit_sh(args, environment);
+    return success;
+  }
 
   /* cd */
 
@@ -230,6 +255,8 @@ int execute(char **args, struct shell_env *environment) {
     dprintf("Executing child process with command word %s",args[0]);
 
     /* TODO Reset all signals to dispositions when smallsh was invoked */
+    sigfillset(&environment->sh_signals);
+    signal(SIGINT, SIG_DFL);
 
     /* Redirect input and output, if requested */
     if (environment->outfile_path != NULL) {
@@ -356,8 +383,15 @@ int main(void) {
   .last_bg_pid = 0,
   .last_fg_exit_status = 0,
   .bg_process_list= {},
-  .run_in_background = false
+  .run_in_background = false,
   };
+
+  /* Initialize signal handling */
+  sigfillset(&environment.sh_signals);
+  sigdelset(&environment.sh_signals, SIGSTOP);
+  signal(SIGINT, SIG_IGN);
+
+
 
   /* Get PID of smallsh for later expansion */
   environment.self_pid = getpid();
@@ -377,6 +411,9 @@ int main(void) {
     }
     fprintf(stderr,"%s", prompt);
 
+    /* Line reading listens to sigint */
+    signal(SIGINT, SIG_DFL);
+
     /* Read a line of input */
     read = getline(&line_ptr, &line_len, stdin);
     dprintf("Read %ld chars from line\n", read);
@@ -388,6 +425,9 @@ int main(void) {
     } else {
     dprintf("Line input: %s\n", line_ptr);
     };
+
+    /* Back to ignoring signals */
+    signal(SIGINT, SIG_IGN);
 
     /* Split input */
     words_read = split_input(words, line_ptr);
