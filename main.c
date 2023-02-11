@@ -32,9 +32,9 @@
 
 
 struct shell_env {
-  char *self_pid;
-  char *last_fg;
-  char *last_bg;
+  pid_t self_pid;
+  int last_fg_exit_status;
+  pid_t last_bg_pid;
   char *home_dir;
   char *infile_path;
   char *outfile_path;
@@ -42,6 +42,16 @@ struct shell_env {
   bool run_in_background;
 };
 
+char *pid_to_str(pid_t process_id) {
+  /*Converts a pid to a string and returns a pointer to that string */
+  /*Uses dynamic memory allocation - be sure to free after use! */
+  char *str = NULL;
+  char *fmt = "%d";
+  int len = snprintf(NULL, 0, fmt, process_id);
+  str = malloc(sizeof *str * (len + 2));
+  snprintf(str, len+1, fmt, process_id);
+  return str;
+}
 
 int split_input(char **words, char *line_ptr) {
     /* Splits string 'line_ptr' into an array of substrings pointed at by 'words'
@@ -115,8 +125,16 @@ int expand(char **args, struct shell_env *environment) {
   strcpy(home_dir, tmp_home_dir);
   strcat(home_dir, "/");
 
-
-
+  /* set substitution strings based on environment values or defaults if not available */
+  char *self_pid_sub = pid_to_str(environment->self_pid);
+  char *last_fg_exit_status_sub = pid_to_str(environment->last_fg_exit_status);
+  char *last_bg_pid_sub = NULL;
+  if (environment->last_bg_pid == 0) {
+    last_bg_pid_sub = "";
+  } else {
+    last_bg_pid_sub = pid_to_str(environment->last_bg_pid);
+  }
+  
   for (int i=0; args[i] != NULL && i < WORD_LIMIT; i++) {
 
     /* Expand ~/ if it occurs at start of word */
@@ -125,17 +143,21 @@ int expand(char **args, struct shell_env *environment) {
     }
 
     /* Smallsh PID  */
-    if (str_gsub(&args[i],"$$", environment->self_pid, false) == NULL) perror("Sub $$");
+    if (str_gsub(&args[i],"$$", self_pid_sub, false) == NULL) perror("Sub $$");
 
     /* Last fg process exit status  */
-    if (str_gsub(&args[i],"$?", environment->last_bg, false) == NULL) perror("Sub $?");
+    if (str_gsub(&args[i],"$?", last_fg_exit_status_sub, false) == NULL) perror("Sub $?");
 
-    /* Last bg process exit status  */
-    if (str_gsub(&args[i],"$!", environment->last_fg, false) == NULL) perror("Sub $!");
+    /* Last bg process pid  */
+    if (str_gsub(&args[i],"$!", last_bg_pid_sub, false) == NULL) perror("Sub $!");
 
   }
 
+/* pid_to_str uses dynamic memory allocation so we have to clean up*/
 free(home_dir);
+free(self_pid_sub);
+free(last_fg_exit_status_sub);
+if (strlen(last_bg_pid_sub) > 0) free(last_bg_pid_sub);
 
 return 0;
 }
@@ -318,6 +340,7 @@ int parse(char** args, struct shell_env *environment) {
 }
 
 
+
 int main(void) {
   char* line_ptr = NULL;
   size_t line_len = 0;
@@ -329,24 +352,15 @@ int main(void) {
   words = malloc(sizeof *words * WORD_LIMIT); 
 
   struct shell_env environment = {
-  .self_pid = "",
-  .last_bg = "0",
-  .last_fg = "",
+  .self_pid = 0,
+  .last_bg_pid = 0,
+  .last_fg_exit_status = 0,
   .bg_process_list= {},
   .run_in_background = false
   };
 
   /* Get PID of smallsh for later expansion */
-  int smallsh_pid = 0;
-  smallsh_pid = getpid();
-  dprintf("SmallshPID = %d\n",smallsh_pid);
-  char *fmt = "%d";
-  int len = snprintf(NULL, 0, fmt, smallsh_pid);
-  environment.self_pid = malloc(sizeof environment.self_pid * (len + 2));
-  snprintf(environment.self_pid, len+1, fmt, smallsh_pid);
-  dprintf("SmallshPID = %s\n",environment.self_pid);
-
-
+  environment.self_pid = getpid();
 
   for (;;) {
 
