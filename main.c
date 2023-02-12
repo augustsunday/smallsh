@@ -22,9 +22,6 @@
 /* Maximum # of arguments allowed in a line */
 #define WORD_LIMIT 512
 
-/* Maximum number of bg processes allowed */
-#define PROCESS_LIMIT 512
-
 /* print statement for debug use */
 #ifdef DEBUG
 #define dprintf(...) fprintf(stderr, __VA_ARGS__)
@@ -40,7 +37,6 @@ struct shell_env {
   char *home_dir;
   char *infile_path;
   char *outfile_path;
-  pid_t *bg_process_list;
   bool run_in_background;
   sigset_t sh_signals;
 };
@@ -291,31 +287,30 @@ int execute(char **args, struct shell_env *environment) {
 
 	default:
 		// In the parent process
-    // fg or bg process?
 
     dprintf("In parent process\n");
+
     
-    /* Foreground process */
+    /* Wait for foreground process */
     if (!environment->run_in_background) {
-      spawnPid = waitpid(spawnPid, &childStatus, 0);
+      waitpid(spawnPid, &childStatus, 0);
+      if (WIFEXITED(childStatus)) environment->last_fg_exit_status = WEXITSTATUS(childStatus);
+      if (WIFSIGNALED(childStatus)) environment->last_fg_exit_status = 128 + WTERMSIG(childStatus);
+      if (WIFSTOPPED(childStatus)) {
+        kill(spawnPid, SIGCONT);
+        fprintf(stderr, "Child process %jd stopped. Continuing.\n", (intmax_t) spawnPid);
+      };
+
       dprintf("Child process completed\n");
       return(0);
     }
 
-    /* bg process */
-    int i = 0;
-    for (; (i < PROCESS_LIMIT) && (environment->bg_process_list[i] != 0); i++){};
-    if (i == PROCESS_LIMIT) {
-      perror("Exceeded maximum number of background processes");
-      return(2);
-    } else {
-      /* BG process list has a slot available. Register PID and exit without waiting */
-      dprintf("Added background process to list");
-      environment->bg_process_list[i] = spawnPid;
-      return(0);
-    }
+    /* Record current bg process pid */
+    environment->last_bg_pid = spawnPid;
+
     break;
 	} 
+  return 0;
 }
 
 int parse(char** args, struct shell_env *environment) {
@@ -370,7 +365,9 @@ int manage_bg() {
   int exit_status,
       exit_signal; 
 
-  while ((current_pid = waitpid(0, &status, WUNTRACED | WNOHANG) > 0)) { 
+  for (;;) { 
+    current_pid = waitpid(0, &status, WUNTRACED | WNOHANG);
+    if (current_pid < 1) break;
 
     if (WIFEXITED(status)) {
         exit_status = WEXITSTATUS(status);
@@ -386,9 +383,7 @@ int manage_bg() {
         fprintf(stderr, "Child process %jd stopped. Continuing.\n", (intmax_t) current_pid);
         kill(current_pid, SIGCONT);
     }
-}
-
-if (current_pid == -1) perror("waitpid for any sleeping child process failed");
+  }
 return current_pid;
 }
 
@@ -407,7 +402,6 @@ int main(void) {
   .self_pid = 0,
   .last_bg_pid = 0,
   .last_fg_exit_status = 0,
-  .bg_process_list= malloc(PROCESS_LIMIT * sizeof (pid_t)),
   .run_in_background = false,
   };
 
@@ -424,7 +418,6 @@ int main(void) {
 
   for (;;) {
 
-    /* Input */
     /* Manage background processes */
     manage_bg();
 
@@ -443,8 +436,9 @@ int main(void) {
     read = getline(&line_ptr, &line_len, stdin);
     dprintf("Read %ld chars from line\n", read);
     if (read == -1) {
-      perror("error: getline");
-      exit(EXIT_FAILURE);     
+      if (feof(stdin)) exit_sh(words, &environment);
+      perror("getline");
+      exit(errno);     
     } else if (read == 0) {
       goto cleanup;
     } else {
@@ -473,10 +467,6 @@ int main(void) {
     /* Execute */
     if (words[0] == NULL) continue;
     execute(words, &environment);
-   
-    
-
-    /* Waiting */
 
     /* Cleanup */
 cleanup:;
