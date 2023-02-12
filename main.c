@@ -7,6 +7,7 @@
 
 #include <fcntl.h>
 #include <signal.h>
+#include <stdint.h>
 #include <stdlib.h>
 #include <stdio.h>
 #include <string.h>
@@ -39,7 +40,7 @@ struct shell_env {
   char *home_dir;
   char *infile_path;
   char *outfile_path;
-  pid_t bg_process_list[PROCESS_LIMIT];
+  pid_t *bg_process_list;
   bool run_in_background;
   sigset_t sh_signals;
 };
@@ -303,12 +304,13 @@ int execute(char **args, struct shell_env *environment) {
 
     /* bg process */
     int i = 0;
-    for (; i < PROCESS_LIMIT && environment->bg_process_list[i] != 0; i++){};
+    for (; (i < PROCESS_LIMIT) && (environment->bg_process_list[i] != 0); i++){};
     if (i == PROCESS_LIMIT) {
       perror("Exceeded maximum number of background processes");
       return(2);
     } else {
       /* BG process list has a slot available. Register PID and exit without waiting */
+      dprintf("Added background process to list");
       environment->bg_process_list[i] = spawnPid;
       return(0);
     }
@@ -359,13 +361,36 @@ int parse(char** args, struct shell_env *environment) {
       }
     }
   }
-
-
-
-
   return 0;
 }
 
+int manage_bg() {
+  int current_pid = 0;
+  int status= 0;
+  int exit_status,
+      exit_signal; 
+
+  while ((current_pid = waitpid(0, &status, WUNTRACED | WNOHANG) > 0)) { 
+
+    if (WIFEXITED(status)) {
+        exit_status = WEXITSTATUS(status);
+        fprintf(stderr, "Child process %jd done. Exit status %d.\n", (intmax_t) current_pid, exit_status);
+      } 
+
+    else if (WIFSIGNALED(status)) {
+        exit_signal = WTERMSIG(status);
+        fprintf(stderr, "Child process %jd done. Signaled %d.\n", (intmax_t) current_pid, exit_signal);
+    }
+
+    else if (WIFSTOPPED(status)) {
+        fprintf(stderr, "Child process %jd stopped. Continuing.\n", (intmax_t) current_pid);
+        kill(current_pid, SIGCONT);
+    }
+}
+
+if (current_pid == -1) perror("waitpid for any sleeping child process failed");
+return current_pid;
+}
 
 
 int main(void) {
@@ -382,9 +407,10 @@ int main(void) {
   .self_pid = 0,
   .last_bg_pid = 0,
   .last_fg_exit_status = 0,
-  .bg_process_list= {},
+  .bg_process_list= malloc(PROCESS_LIMIT * sizeof (pid_t)),
   .run_in_background = false,
   };
+
 
   /* Initialize signal handling */
   sigfillset(&environment.sh_signals);
@@ -398,10 +424,9 @@ int main(void) {
 
   for (;;) {
 
-    /* TODO: Realloc everything */
-
     /* Input */
     /* Manage background processes */
+    manage_bg();
 
     /* Prompt */
     prompt = getenv("PS1");
