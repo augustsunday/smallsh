@@ -30,6 +30,7 @@
 #endif
 
 
+/* This is where we keep environment variables, signals, and flags used in redirection */
 struct shell_env {
   pid_t self_pid;
   int last_fg_exit_status;
@@ -116,6 +117,8 @@ exit:;
  }
 
 int expand(char **args, struct shell_env *environment) {
+  /* Expands any tokens found in args into their environment variable equivalents */
+
   /* initialize home dir for possible ~/ substitution and append trailing '/' */
   char *tmp_home_dir = getenv("HOME");
   int len = strlen(tmp_home_dir);
@@ -163,13 +166,15 @@ return 0;
 
 
 int cd(char **args, struct shell_env *environment) {
+/* local version of the 'cd' command. Changes to specified directory, or home if none given */
+/* returns errno if unable to change directories, -1 if too many arguments given */
   int ret = 0;
   dprintf("cd built-in\n");
   dprintf("args[1]: %s\n",args[1]);
   dprintf("args[2]: %s\n",args[2]);
   if (args[1] != NULL && args[2] != NULL) {
     perror("too many arguments");
-    return 1;
+    return -1;
   }
 
   else if (args[1] == NULL) {
@@ -192,6 +197,9 @@ int cd(char **args, struct shell_env *environment) {
 }
 
 int exit_sh(char **args, struct shell_env *environment) {
+  /* Built-in exit command. Exits with status provided, or exit status of last fg command if none given */
+  /* Sends SIGINT to all bg processes before exit */
+  /* Returns error -1 if too many arguments given */
   /* set exit status*/
   int exit_status = environment->last_fg_exit_status;
   dprintf("built-in exit function 'exit_sh'\n");
@@ -200,7 +208,7 @@ int exit_sh(char **args, struct shell_env *environment) {
 
   if (args[1] != NULL && args[2] != NULL) {
     perror("too many arguments");
-    return 1;
+    return -1;
   }
   if (args[1]) exit_status = atoi(args[1]);
 
@@ -213,6 +221,8 @@ int exit_sh(char **args, struct shell_env *environment) {
     
 
 int execute(char **args, struct shell_env *environment) {
+  /* Fork and execute provided command, with redirection and run in background if flagged in 'environment' */
+  /* Returns exit status of last fg command if succesful, -1 otherwise */
   int childStatus;
 
   /* initial check for existence of valid command word*/
@@ -245,7 +255,7 @@ int execute(char **args, struct shell_env *environment) {
   switch(spawnPid){
 	case -1:
 		perror("fork()\n");
-		return(1);
+		return(errno);
 		break;
 	case 0:
     /* Child process */
@@ -259,22 +269,22 @@ int execute(char **args, struct shell_env *environment) {
     if (environment->outfile_path != NULL) {
       if(fclose(stdout) != 0) {
         perror("Unable to close stdout for redirection\n");
-        exit(errno);
+        return(errno);
       };
       if (open(environment->outfile_path, O_WRONLY | O_CREAT | O_TRUNC, 0777) == -1) {
         perror("Unable to open file for output redirection\n");
-        exit(errno);
+        return(errno);
       }
     }
 
     if (environment->infile_path != NULL) {
       if(fclose(stdin) != 0) {
         perror("Unable to close stdin for redirection\n");
-        exit(errno);
+        return(errno);
       };
       if (open(environment->infile_path,O_RDONLY) == -1) {
         perror("Unable to open file for input redirection\n");
-        exit(errno);
+        return(errno);
       }
 
     }
@@ -282,7 +292,7 @@ int execute(char **args, struct shell_env *environment) {
     execvp(*args, args);
 		// exec only returns if there is an error
 		perror("execute");
-		return(2);
+		return(-1);
 		break;
 
 	default:
@@ -360,6 +370,7 @@ int parse(char** args, struct shell_env *environment) {
 }
 
 int manage_bg() {
+  /* Manages background processes and prints a status message for each completed or stopped bg process */
   int current_pid = 0;
   int status= 0;
   int exit_status,
@@ -425,7 +436,7 @@ int main(void) {
     prompt = getenv("PS1");
     dprintf("PS1 Prompt: %s\n",prompt);
     if (prompt == NULL || *prompt == '\0') {
-      prompt = "$\0";
+      prompt = "\0";
     }
     fprintf(stderr,"%s", prompt);
 
