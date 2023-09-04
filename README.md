@@ -107,6 +107,7 @@ or
 If after parsing a valid command word is not present smallsh will simply re-prompt without returning an error
 
 ## License
+[MIT License](LICENSE)
 
 
 
